@@ -70,6 +70,7 @@ out_loadprofile_data.txt
 FRS_config*.json
 
 # Docs
+!docs/**/*.png
 docs/build
 docs/code/.doctrees
 docs/code/_sphinx_design_static
