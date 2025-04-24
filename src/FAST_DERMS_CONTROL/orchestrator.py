@@ -1,5 +1,5 @@
 """
-Part of the FAST-DERMS Flexible Resource Scheduler Demonstration
+Part of the FAST-DERMS Flexible Resource Scheduler
 """
 
 import FAST_DERMS_CONTROL.IOs.IOclass as IO

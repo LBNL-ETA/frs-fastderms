@@ -19,7 +19,7 @@ path_to_repo = path_to_repo.resolve()
 sys.path.insert(0, str(path_to_repo))
 
 # -- Project information -----------------------------------------------------
-master_doc = "_index"
+master_doc = "index"
 
 project = "Flexible Resource Scheduler (FRS) for FAST-DERMS"
 copyright = "Copyright 2025, The Regents of the University of California, through Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the U.S. Dept. of Energy). All rights reserved"
