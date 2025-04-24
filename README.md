@@ -1,3 +1,5 @@
+[![Documentation Status](https://readthedocs.org/projects/fast-derms-frs/badge/?version=latest)](https://fast-derms-frs.readthedocs.io/en/latest/?badge=latest)
+
 # Flexible Resource Scheduler for FAST-DERMS (FRS-FASTDERMS)
 
 ## License
