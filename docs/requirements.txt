@@ -1,0 +1,8 @@
+# Requirements file for FASTDERMS Docs
+# Python version must be 3.8
+# Run using pip install -r requirements.txt
+
+sphinx
+sphinx-rtd-theme
+sphinx-substitution-extensions
+sphinx-design

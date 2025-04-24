@@ -1,0 +1,40 @@
+ [[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+cimpy = "*"
+ipykernel = "*"
+numpy = "*"
+pandas = "*"
+matplotlib = "*"
+pypiwin32 = {version = "*", markers = "platform_system == 'Windows'"}
+cython = "*"
+pytest = "*"
+docker = "*"
+"stomp.py" = "==6.0.0"
+pyomo = "*"
+tabulate = "*"
+simple-pid = "*"
+pycim = {editable = true, ref = "master", git = "https://github.com/MaximeBaudette/PyCIM.git"}
+gridappsd-python = "*"
+influxdb = "*"
+seaborn = "*"
+openpyxl = "*"
+numpyencoder = "*"
+scikit-learn = "*"
+pyutilib = "*"
+control = "*"
+aggregator = {git = "git+https://github.com/MaximeBaudette/virtual-battery-aggregator.git"}
+sphinx = "*"
+sphinx-rtd-theme = "*"
+sphinx-substitution-extensions = "*"
+sphinx-design = "*"
+sphinxcontrib-restbuilder = "*"
+
+[dev-packages]
+notebook = "*"
+
+[requires]
+python_version = "3.8"
