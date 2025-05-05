@@ -32,8 +32,7 @@ __version__ = "0.9"
 #############################################################################################
 DEFAULT_MESSAGE_PERIOD = 5
 
-default_FRS_topic = "FRS"
-default_mrid = "battery_aggregator"
+default_FRS_topic = "FRS_RT_Control"
 logger_name = "__Main__Aggregator"
 # Battery Data
 # Aggregates
@@ -279,7 +278,7 @@ default_meas_ids_batt_aggregator = {
 }
 
 
-_log = logging.getLogger(logger_name)
+_logger = logging.getLogger(logger_name)
 
 
 ##############################################################################################
@@ -340,22 +339,23 @@ class BatterAggregator_Object(object):
         capacitor_list: list(str)
             A list of capacitors mrids to turn on/off
         """
+        self.mrid = kw_args.get("mrid", app_name)
         # Re-authenticate with GridAPPS-D (the java security token doesn't get inherited well)
-        os.environ["GRIDAPPSD_APPLICATION_ID"] = logger_name
+        os.environ["GRIDAPPSD_APPLICATION_ID"] = self.mrid
         os.environ["GRIDAPPSD_APPLICATION_STATUS"] = "STARTED"
         os.environ["GRIDAPPSD_USER"] = "app_user"
         os.environ["GRIDAPPSD_PASSWORD"] = "1234App"
 
         try:
             # Connect to GridAPPS-D Platform
-            gapps = GridAPPSD(simulation_id=simulation_id)
-            if not gapps.connected:
+            _gapps = GridAPPSD(simulation_id=simulation_id)
+            if not _gapps.connected:
                 raise ConnectionError("Failed to connect to GridAPPS-D")
         except Exception as e:
-            self.logger.error(e)
-            gapps = None
+            _logger.error(e)
+            _gapps = None
 
-        self._gapps = gapps
+        self._gapps = _gapps
         self._simulation_id = simulation_id
 
         self._simout_topic = simulation_output_topic(simulation_id)
@@ -363,20 +363,18 @@ class BatterAggregator_Object(object):
             simulation_id
         )
         FRS_topic = kw_args.get("FRS_topic", default_FRS_topic)
-        self._frs_control_topic = application_output_topic(
-            f"{FRS_topic}_RT_Control", None
-        )
-        self.mrid = kw_args.get("mrid", default_mrid)
+        self._frs_control_topic = application_output_topic(FRS_topic, None)
+
         self._aggregator_topic = application_output_topic(self.mrid, None)
         self._publish_to_topic = simulation_input_topic(simulation_id)
         self._automation_topic = kw_args.get(
             "automation_topic", service_input_topic("automation", simulation_id)
         )
 
-        _log.warning(
+        _logger.warning(
             f"subscribing to (internal):\n {self._simout_topic}\n {self._ochre_topic}\n {self._frs_control_topic}"
         )
-        _log.warning(f"publishing to:\n {self._publish_to_topic}")
+        _logger.warning(f"publishing to:\n {self._publish_to_topic}")
 
         # Aggregator Parameters
         self._time_res = dt.timedelta(minutes=5)
@@ -384,32 +382,32 @@ class BatterAggregator_Object(object):
         self.aggregate_models = kw_args.get(
             "aggregate_models", default_aggregate_models
         )
-        _log.debug(f"Aggregator models:\n{self.aggregate_models}")
+        _logger.debug(f"Aggregator models:\n{self.aggregate_models}")
         # Instantiating NREL Aggregator
         self.aggregates = {
             key: BatteryAggregator(self._time_res, format_agg_data(aggregate))
             for key, aggregate in self.aggregate_models.items()
         }
-        _log.debug(
+        _logger.debug(
             f"Aggregates:\n{[aggregator.models for _, aggregator in self.aggregates.items()]}"
         )
 
         self.utility_models = kw_args.get("utility_models", default_utility_models)
-        _log.debug(f"Utility models:\n{self.utility_models}")
+        _logger.debug(f"Utility models:\n{self.utility_models}")
 
         # Instantiating NREL Aggregator
         self.utility_batts = {
             key: BatteryAggregator(self._time_res, format_agg_data(utility_batt))
             for key, utility_batt in self.utility_models.items()
         }
-        _log.debug(
+        _logger.debug(
             f"Utility Batteries:\n{[aggregator.models for _, aggregator in self.utility_batts.items()]}"
         )
 
         meas_ids_batt_aggregator = kw_args.get(
             "meas_IDs", default_meas_ids_batt_aggregator
         )
-        _log.debug(
+        _logger.debug(
             f"Measurement IDs for battery aggregator:\n{meas_ids_batt_aggregator}"
         )
         self._house_dict = {}
@@ -422,7 +420,7 @@ class BatterAggregator_Object(object):
             )
         }
         self._num_houses = len(self._houses_with_battery)
-        _log.debug(
+        _logger.debug(
             f"Number of houses managed by Battery Aggregator: {self._num_houses}"
         )
         # initializing all aggreagtors to 0
@@ -444,7 +442,7 @@ class BatterAggregator_Object(object):
         self.current_time = 0
         self._message_count = 0
         # self._is_initialized = True
-        _log.info("Battery Aggregator Initialized")
+        _logger.info("Battery Aggregator Initialized")
         self.send_gapps_message(self._automation_topic, {"command": "stop_task"})
 
         # self._battery_names = []
@@ -469,21 +467,21 @@ class BatterAggregator_Object(object):
             for key in message.keys():
                 out_message[key] = message[key]
         except:
-            _log.info("Message is not a dictionary")
+            _logger.info("Message is not a dictionary")
             out_message["message"] = message
         finally:
             try:
                 if self._gapps is None:
                     raise Exception(" No GAPPS: Cannot send message")
                 self._gapps.send(topic, json.dumps(out_message))
-                _log.info(f"Sent message to topic {topic} at {dt.datetime.now()}")
-                _log.debug(f"Message Content: {out_message}")
+                _logger.info(f"Sent message to topic {topic} at {dt.datetime.now()}")
+                _logger.debug(f"Message Content: {out_message}")
                 return True
             except Exception as e:
-                _log.error(
+                _logger.error(
                     f"Failed to send message to topic {topic} at {dt.datetime.now()}"
                 )
-                _log.error(e)
+                _logger.error(e)
                 return False
 
     def send_house_command(self, house_name="House_n10", battery_p_setpoint=2.0):
@@ -492,15 +490,17 @@ class BatterAggregator_Object(object):
         forward = {"Battery": {"P Setpoint": battery_p_setpoint}}
         ochre_diff.add_difference(house_name, "Ochre.command", json.dumps(forward), "")
         msg = ochre_diff.get_message()
-        _log.debug(f"Sending Ochre command to {house_name}:\n{msg}")
+        _logger.debug(f"Sending Ochre command to {house_name}:\n{msg}")
         self._gapps.send(self._publish_to_topic, json.dumps(msg))
 
     def send_aggregator_measurement(self, measurement_dict, **kw_args):
-        _log.info("Sending aggregator measurements")
+        _logger.info("Sending aggregator measurements")
         message = []
         for aggregate_mRID, measurements in measurement_dict.items():
             for meas_name, meas_value in measurements.items():
-                _log.debug(f"Aggregate {aggregate_mRID} has {meas_name} {meas_value}")
+                _logger.debug(
+                    f"Aggregate {aggregate_mRID} has {meas_name} {meas_value}"
+                )
                 message.append(
                     {
                         "measurement_mrid": f"{aggregate_mRID}_{meas_name}",
@@ -519,7 +519,7 @@ class BatterAggregator_Object(object):
         data["message"] = message
         data["tags"] = ["measurement_mrid", "simulation_id"]
 
-        _log.debug(f"Measurement Payload:\n{data}")
+        _logger.debug(f"Measurement Payload:\n{data}")
         self._gapps.send(self._aggregator_topic, data)
 
     def on_message(self, headers, message):
@@ -536,14 +536,13 @@ class BatterAggregator_Object(object):
             not a requirement.
         """
 
-        _log.debug(f"Received message on topic: {headers['destination']}")
         message_timestamp = int(headers["timestamp"]) / 1000
 
         try:
             # RT controller message
             if self._frs_control_topic in headers["destination"]:
-                _log.info(f"Processing message from RT controller")
-                _log.debug(f"The RT control message is:\n{message}")
+                _logger.info(f"Processing message from RT controller")
+                _logger.debug(f"The RT control message is:\n{message}")
 
                 for data_dict in message["message"]:
                     # Process the message
@@ -553,10 +552,12 @@ class BatterAggregator_Object(object):
                         [self.aggregate_models, self.utility_models]
                     ):
                         self._agg_setpoints.update({resourceID: setpoint})
-                        _log.debug(f"Updated aggregator {resourceID} to {setpoint} kW")
+                        _logger.debug(
+                            f"Updated aggregator {resourceID} to {setpoint} kW"
+                        )
 
             elif self._simout_topic in headers["destination"]:
-                _log.info(f"Processing message from simulation output")
+                _logger.debug(f"Processing message from simulation output")
                 ########################################################################################################################
                 # Process the message
                 measurements = message["message"]["measurements"]
@@ -567,7 +568,7 @@ class BatterAggregator_Object(object):
                     [self.aggregate_models.items(), self.utility_models.items()]
                 ):
 
-                    _log.debug(f"Processing aggregate {resourceID}")
+                    _logger.debug(f"Processing aggregate {resourceID}")
                     aggregate_power = 0
                     for house_nr in aggregate.keys():
                         try:
@@ -584,26 +585,26 @@ class BatterAggregator_Object(object):
                             # Computing power in kW
                             house_power = house_power / 1000
                             aggregate_power += house_power
-                            _log.debug(
+                            _logger.debug(
                                 f"House {house_nr} has power {house_power:.3f} kW"
                             )
                         except Exception as e:
-                            _log.error(e)
-                            _log.error(f"Could not get power for house {house_nr}")
+                            _logger.error(e)
+                            _logger.error(f"Could not get power for house {house_nr}")
 
-                    _log.info(
+                    _logger.info(
                         f"Aggregate {resourceID} has power {aggregate_power:.3f} kW"
                     )
 
             elif self._ochre_topic in headers["destination"]:
-                _log.info(f"Processing message from Ochre")
-                _log.debug(f"The message is:\n{message}")
+                _logger.info(f"Processing message from Ochre")
+                _logger.debug(f"The message is:\n{message}")
 
                 for house_nr in self._houses_with_battery.keys():
                     house = "House_" + house_nr
                     if house in message.keys():
                         self._message_count += 1
-                        _log.info(f"new message count is: {self._message_count}")
+                        _logger.info(f"new message count is: {self._message_count}")
                 # --------------------------------------------------------------------------------------------
                 # Process the Aggregates
                 for aggregate in self.aggregate_models.values():
@@ -624,9 +625,9 @@ class BatterAggregator_Object(object):
                                 message[house]["P Uncontrolled"],
                             ]
                             self._house_dict[house] = values
-                            _log.debug(f"{house} in aggregator values: {values}")
+                            _logger.debug(f"{house} in aggregator values: {values}")
                         # else:
-                        #    _log.debug(f'{house} not contained in houses in message, {message.keys()}')
+                        #    _logger.debug(f'{house} not contained in houses in message, {message.keys()}')
 
                 # Process the Aggregates
                 for aggregate in self.utility_models.values():
@@ -647,9 +648,11 @@ class BatterAggregator_Object(object):
                                 message[house]["P Uncontrolled"],
                             ]
                             self._house_dict[house] = values
-                            _log.debug(f"{house} in utility Battery values: {values}")
+                            _logger.debug(
+                                f"{house} in utility Battery values: {values}"
+                            )
                 #                        else:
-                #                            _log.debug(f'{house} not contained in houses in message, {message.keys()}')
+                #                            _logger.debug(f'{house} not contained in houses in message, {message.keys()}')
 
                 if (
                     self._message_count % self._num_houses == 0
@@ -683,7 +686,7 @@ class BatterAggregator_Object(object):
                                 if "House_" + imp in self._house_dict.keys()
                             ]
                         )
-                        _log.debug(
+                        _logger.debug(
                             f"Aggregate SOC for {key}: {SOC_kwh/Capacity_kwh}, Energy in Wh: {SOC_kwh*1000}"
                         )
 
@@ -692,12 +695,12 @@ class BatterAggregator_Object(object):
                             battery_setpoints = aggregator.dispatch(
                                 p_setpoint=self._agg_setpoints[key]
                             )
-                            _log.debug(
+                            _logger.debug(
                                 f"Individual battery setpoints from aggregator: {battery_setpoints}"
                             )
                             self._batt_setpoints.update(battery_setpoints)
                         except Exception as e:
-                            _log.error(f"Error in dispatching {key} setpoints:\n{e}")
+                            _logger.error(f"Error in dispatching {key} setpoints:\n{e}")
                     # let's process the utility batts
                     for key, aggregator in self.utility_batts.items():
                         aggregate_model = self.utility_models[key]
@@ -724,7 +727,7 @@ class BatterAggregator_Object(object):
                                 if "House_" + imp in self._house_dict.keys()
                             ]
                         )
-                        _log.debug(
+                        _logger.debug(
                             f"Aggregate SOC for {key}: {SOC_kwh_u/Capacity_kwh_u}, Energy in Wh: {SOC_kwh_u*1000}"
                         )
 
@@ -733,47 +736,50 @@ class BatterAggregator_Object(object):
                             battery_setpoints = aggregator.dispatch(
                                 p_setpoint=self._agg_setpoints[key]
                             )
-                            _log.debug(
+                            _logger.debug(
                                 f"Individual battery setpoints from aggregator: {battery_setpoints}"
                             )
                             self._batt_setpoints.update(battery_setpoints)
                         except Exception as e:
-                            _log.error(f"Error in dispatching {key} setpoints:\n{e}")
+                            _logger.error(f"Error in dispatching {key} setpoints:\n{e}")
 
                     # Dispatch the individual bateries
                     for battery, setpoint in self._batt_setpoints.items():
                         house_name = "House_" + battery.split("_")[1]
                         self.send_house_command(house_name, setpoint)
-                        _log.debug(f"Setpoints for battery {house_name}: {setpoint}")
+                        _logger.debug(f"Setpoints for battery {house_name}: {setpoint}")
 
                     self.send_aggregator_measurement(
                         _agg_Data, timestamp=self.current_time
                     )
 
                     # -------------------------------------------------------
-                    _log.warning(
+                    _logger.warning(
                         "Start Aggregation_____________________________________________"
                     )
-                    _log.debug(f"message count {self._message_count}")
-                    _log.info(f"Output results\n {self._house_dict}")
-                    _log.info(f"Virtual setpoint\n {self._agg_setpoints}")
-                    _log.info(f"Battery setpoints\n {self._batt_setpoints}")
-                    _log.info(
+                    _logger.debug(f"message count {self._message_count}")
+                    _logger.info(f"Output results\n {self._house_dict}")
+                    _logger.info(f"Virtual setpoint\n {self._agg_setpoints}")
+                    _logger.info(f"Battery setpoints\n {self._batt_setpoints}")
+                    _logger.info(
                         "End Aggregation_____________________________________________"
                     )
                     # -------------------------------------------------------------
 
                     # -------------------------- Data storege to CSV file
-
+            else:
+                _logger.debug(
+                    f"Received Unknown message on topic: {headers['destination']}"
+                )
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()
-            _log.error(f"Error: {e}, {exc_type}, {exc_obj}, {exc_tb.tb_lineno}")
+            _logger.error(f"Error: {e}, {exc_type}, {exc_obj}, {exc_tb.tb_lineno}")
             self._error_code = True
             raise
 
 
 ########################## To get node voltages
-def get_meas_mrid(gapps, model_mrid, topic):
+def get_meas_mrid(_gapps, model_mrid, topic):
 
     message = {
         "modelId": model_mrid,
@@ -781,7 +787,7 @@ def get_meas_mrid(gapps, model_mrid, topic):
         "resultFormat": "JSON",
         "objectType": "ACLineSegment",
     }
-    obj_msr_ACline = gapps.get_response(topic, message, timeout=180)
+    obj_msr_ACline = _gapps.get_response(topic, message, timeout=180)
     obj_msr_ACline = obj_msr_ACline["data"]
     obj_msr_ACline = [measid for measid in obj_msr_ACline if measid["type"] == "PNV"]
 
@@ -791,7 +797,7 @@ def get_meas_mrid(gapps, model_mrid, topic):
         "resultFormat": "JSON",
         "objectType": "LoadBreakSwitch",
     }
-    obj_msr_loadsw = gapps.get_response(topic, message, timeout=180)
+    obj_msr_loadsw = _gapps.get_response(topic, message, timeout=180)
     # print(obj_msr_loadsw)
     # print(sh)
 
@@ -804,7 +810,7 @@ def get_meas_mrid(gapps, model_mrid, topic):
 
 
 def _main():
-    _log.debug("Starting application")
+    _logger.debug("Starting application")
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -814,7 +820,7 @@ def _main():
     parser.add_argument("config", help="App Config")
 
     # Authenticate with GridAPPS-D Platform
-    os.environ["GRIDAPPSD_APPLICATION_ID"] = logger_name
+    os.environ["GRIDAPPSD_APPLICATION_ID"] = app_name
     os.environ["GRIDAPPSD_APPLICATION_STATUS"] = "STARTED"
     os.environ["GRIDAPPSD_USER"] = "app_user"
     os.environ["GRIDAPPSD_PASSWORD"] = "1234App"
@@ -845,7 +851,7 @@ def _main():
     if not any(handler._name in ["console"] for handler in root_logger.handlers):
         root_logger.addHandler(console)
 
-    _log.setLevel(log_level)
+    _logger.setLevel(log_level)
 
     ############## Individual Logger
     log_filename = Path(path_to_logs) / "_log_BatteryAggregator.log"
@@ -862,46 +868,46 @@ def _main():
         root_logger.addHandler(debug_file)
     ############### END OF INDIVIDUAL LOG FILE
 
-    _log.warning(
+    _logger.warning(
         "BatteryAggregator Starting!!!-------------------------------------------"
     )
 
     simulation_id = opts.simulation_id
     model_id = sim_request["power_system_config"]["Line_name"]
-    _log.debug(f"Model mrid is: {model_id}")
+    _logger.debug(f"Model mrid is: {model_id}")
 
-    gapps = GridAPPSD(simulation_id=simulation_id)
-    if gapps.connected:
-        _log.debug(f"GridAPPSD connected to simulation {simulation_id}")
+    _gapps = GridAPPSD(simulation_id=simulation_id)
+    if _gapps.connected:
+        _logger.debug(f"GridAPPSD connected to simulation {simulation_id}")
     else:
-        _log.error("GridAPPSD not Connected")
+        _logger.error("GridAPPSD not Connected")
 
     battery_agg = BatterAggregator_Object(simulation_id, model_id, **app_config)
 
     # Subscribing to Simulation Output
     sim_out_topic = simulation_output_topic(simulation_id)
-    gapps.subscribe(sim_out_topic, battery_agg)
+    _gapps.subscribe(sim_out_topic, battery_agg)
 
     # Subscribing to Ochre Output
     ochre_output_topic = "/topic/goss.gridappsd.simulation.ochre.output." + str(
         simulation_id
     )
-    gapps.subscribe(ochre_output_topic, battery_agg)
+    _gapps.subscribe(ochre_output_topic, battery_agg)
 
     # Subscribing to FRS Output
     FRS_topic = app_config.get("FRS_topic", default_FRS_topic)
-    rt_topic = application_output_topic(f"{FRS_topic}_RT_Control", None)
-    gapps.subscribe(rt_topic, battery_agg)
+    control_topic = application_output_topic(FRS_topic, None)
+    _gapps.subscribe(control_topic, battery_agg)
 
-    _log.warning(
-        f"subscribing to (main):\n {sim_out_topic}\n {ochre_output_topic}\n {rt_topic}"
+    _logger.warning(
+        f"subscribing to (main):\n {sim_out_topic}\n {ochre_output_topic}\n {control_topic}"
     )
 
-    sim_time = sim_time = app_config.get("sim_time", -1)
+    sim_time = app_config.get("sim_time", -1)
     if sim_time == -1:
-        _log.info(f"Info received from remote: sim_time - until termination")
+        _logger.info(f"Info received from remote: sim_time - until termination")
     else:
-        _log.info(f"Info received from remote: sim_time {sim_time} seconds")
+        _logger.info(f"Info received from remote: sim_time {sim_time} seconds")
 
     elapsed_time = 0
     time_to_sleep = 0.1
@@ -909,15 +915,15 @@ def _main():
 
         if not battery_agg.running():
             if battery_agg.error() == 2:
-                _log.warning("Battery Aggregator Terminated")
+                _logger.warning("Battery Aggregator Terminated")
             else:
-                _log.error("Battery Aggregator failed")
+                _logger.error("Battery Aggregator failed")
             break
 
         elapsed_time += time_to_sleep
         time.sleep(time_to_sleep)
 
-    _log.warning(
+    _logger.warning(
         "BatteryAggregator finished!!!-------------------------------------------------------"
     )
 

@@ -36,12 +36,12 @@ default_ISO_topic = "ISO"
 # The reference start time for the period of simulation, it is assumed to be in Pacific time.
 default_tz = "US/Pacific"
 #
-# Offset to run the RT controller in seconds ahead of the timesteps
-default_RT_offset = 0
 
 # RT Control Settings
 # timestep [s.]
 default_timestep = 60
+# Offset to run the RT controller in seconds ahead of the timesteps
+default_RT_offset = 0
 # simulation duration (in seconds)
 default_sim_length = -1
 # number of decimal in setpoints in kW
@@ -84,8 +84,11 @@ class DER_RT_Control(fastderms_app):
         """
         # Forward module name to parent class
         kw_args.update({"name": kw_args.get("name", logger_name)})
+        kw_args.update({"mrid": kw_args.get("mrid", app_name)})
         # Update kw_args with RT controller specific default values
-        kw_args.update({"timestep": kw_args.get("timestep", default_timestep)})
+        kw_args.update(
+            {"message_period": kw_args.get("message_period", default_timestep)}
+        )
         kw_args.update(
             {"iteration_offset": kw_args.get("iteration_offset", default_RT_offset)}
         )
@@ -103,7 +106,7 @@ class DER_RT_Control(fastderms_app):
         )
 
         self._publish_to_topic = self.IOs.application_topic(
-            FRS_topic, "output", sub_id=app_name
+            FRS_topic, "output", sub_id=self.mrid
         )
         self.logger.warning(f"publishing to:\n {self._publish_to_topic}")
 
@@ -172,7 +175,6 @@ class DER_RT_Control(fastderms_app):
         self._ISO_ramp_n_steps = kw_args.get("ISO_ramp_n_steps", 4)
 
         # initialize all the variables:
-        self.status = True
         self._message_count = 0
         self._setpoints = {}
         self._MPC_data = None
@@ -180,7 +182,7 @@ class DER_RT_Control(fastderms_app):
         self.subs_power = None
         # self.MPC_DispatchError = 0.0 #I may want to carry the difference between the PID dispatch and the MPC dispatch right before the MPC change to hot start the PID with the new values.
 
-        self.logger.info(f"{app_name} Initialized")
+        self.logger.info(f"{self.mrid} Initialized")
         self.IOs.send_gapps_message(self._automation_topic, {"command": "stop_task"})
 
     def on_message(self, headers, message):
@@ -195,10 +197,6 @@ class DER_RT_Control(fastderms_app):
             of ``GridAPPSD``. Most message payloads will be serialized dictionaries, but that is
             not a requirement.
         """
-
-        # - DER Setpoints and Reserve Allocations from MPC.
-
-        self.logger.debug(f"Received message on topic: {headers['destination']}")
 
         message_timestamp = int(headers["timestamp"]) / 1000
         try:
@@ -261,12 +259,15 @@ class DER_RT_Control(fastderms_app):
 
             # SIMOUT message
             elif self._simout_topic in headers["destination"]:
+                # Simulation Output Received
+                simulation_timestamp = message["message"]["timestamp"]
+                self.logger.info(
+                    f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}"
+                )
                 # Case to run the RT control
                 # starting after t_start and iterating every dispatch_timestep
-                simulation_timestamp = message["message"]["timestamp"]
-
                 if self.next_iteration is None:
-                    self.logger.debug(
+                    self.logger.warning(
                         "Next iteration is None, starting execution at first simulation message"
                     )
                     self.set_next_iteration(simulation_timestamp, force=True)
@@ -372,16 +373,20 @@ class DER_RT_Control(fastderms_app):
                     self.set_next_iteration(simulation_timestamp)
 
                 else:
-                    self.logger.info(
-                        f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}, waiting until {self.timestamp_to_datetime(self.next_offset_timestamp)}"
+                    self.logger.debug(
+                        f"Waiting until next Iteration at {self.timestamp_to_datetime(self.next_offset_timestamp)}"
                     )
+            else:
+                self.logger.debug(
+                    f"Unknown message received on topic: {headers['destination']}\n{message}"
+                )
 
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()
             self.logger.error(
                 f"Error on line {exc_tb.tb_lineno}: {e},\n{exc_type}, {exc_obj}"
             )
-            self.status = False
+            self._error_code = True
             raise
 
     def get_current_dispatch_timestamp(self, timestamp):
@@ -1190,16 +1195,14 @@ def _main():
     path_to_export = app_config.get("path_to_export", "./logs")
     path_to_export = Path(path_to_export).resolve()
 
-    init_logging(
-        app_name="RT_control", log_level=log_level, path_to_logs=path_to_export
-    )
+    init_logging(app_name=app_name, log_level=log_level, path_to_logs=path_to_export)
 
     _main_logger.warning(
         "RT Control starting!!!-------------------------------------------------------"
     )
 
-    sim_id = opts.simulation_id
-    _main_logger.debug(f"Info received from remote: Simulation ID {sim_id}")
+    simulation_id = opts.simulation_id
+    _main_logger.debug(f"Info received from remote: Simulation ID {simulation_id}")
 
     time_multiplier = app_config.get("time_multiplier", 1)
     if time_multiplier != 1:
@@ -1214,13 +1217,13 @@ def _main():
 
     use_gapps = app_config.get("use_GAPPS", True)
     if use_gapps:
-        gapps = GridAPPSD(simulation_id=sim_id)
-        if gapps.connected:
-            _main_logger.debug(f"GridAPPSD connected to simulation {sim_id}")
+        _gapps = GridAPPSD(simulation_id=simulation_id)
+        if _gapps.connected:
+            _main_logger.debug(f"GridAPPSD connected to simulation {simulation_id}")
         else:
             _main_logger.error("GridAPPSD not Connected")
     else:
-        gapps = None
+        _gapps = None
         _main_logger.warning("No GridAPPSD connection")
 
     file_all_data = app_config.get("file_all_data", None)
@@ -1249,7 +1252,7 @@ def _main():
 
     # Instantiate IO module
     IO = IObackup(
-        simulation_id=sim_id,
+        simulation_id=simulation_id,
         model_id=model_id,
         path_to_repo=path_to_repo,
         path_to_export=path_to_export,
@@ -1261,15 +1264,15 @@ def _main():
     # All ther subscriptions:
     # SIM Output
     simout_topic = IO.simulation_topic("output")
-    gapps.subscribe(simout_topic, rt_controller)
+    _gapps.subscribe(simout_topic, rt_controller)
     # MPC OUT
     FRS_topic = app_config.get("FRS_topic", default_FRS_topic)
     mpc_topic = IO.application_topic(FRS_topic, "output", sub_id="MPC")
-    gapps.subscribe(mpc_topic, rt_controller)
+    _gapps.subscribe(mpc_topic, rt_controller)
     # ISO OUT
     ISO_topic = app_config.get("ISO_topic", default_ISO_topic)
     iso_topic = IO.application_topic(ISO_topic, "output")
-    gapps.subscribe(iso_topic, rt_controller)
+    _gapps.subscribe(iso_topic, rt_controller)
 
     sim_time = app_config.get("sim_time", default_sim_length)
     if sim_time == -1:
@@ -1281,8 +1284,11 @@ def _main():
     time_to_sleep = 0.1
     while elapsed_time < sim_time or sim_time == -1:
 
-        if not rt_controller.status:
-            _main_logger.error("RT Controller failed")
+        if not rt_controller.running():
+            if rt_controller.error() == 2:
+                _main_logger.warning("RT Controller terminated")
+            else:
+                _main_logger.error("RT Controller failed")
             break
 
         elapsed_time += time_to_sleep

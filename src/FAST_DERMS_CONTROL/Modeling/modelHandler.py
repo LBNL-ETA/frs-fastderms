@@ -122,8 +122,25 @@ class modelHandler(fastderms):
             )
         )
 
+        Composite_Resources = self.IO.build_Composite_Resources()
+        self.logger.debug(
+            "\nComposite Resources:\n"
+            + "\n".join(
+                [
+                    f"Composite Resource {resource.getID()} with DERs {resource.get_DER_ids()} and Loads {resource.get_Load_ids()}"
+                    for resource in Composite_Resources
+                ]
+            )
+        )
+
         self.Network = Network(
-            substation_ID, lines, DERs, Loads, self.Sbase, tz=self.local_tz
+            substation_ID,
+            lines,
+            DERs,
+            Loads,
+            self.Sbase,
+            tz=self.local_tz,
+            composite_resources=Composite_Resources,
         )
         self.logger.info("Network Model created from loaded file")
 

@@ -244,6 +244,32 @@ class fastderms_app(fastderms):
             self.logger.info(f"Start time provided: {t_start}")
         self.set_next_iteration(current_time=t_start, force=True)
 
+        # Error Code
+        self._error_code = False
+
+    def running(self):
+        """
+        Check if the application is running without errors.
+
+        Returns:
+            bool: True if the application is running without errors, False otherwise. The status is determined by checking if there's no error code set.
+        """
+        # Check if any error code
+        running = not bool(self._error_code)
+        return running
+
+    def error(self):
+        """
+        Get the current error code of the application.
+
+        Returns:
+            int or bool: The error code value. Possible values:
+                - 0 or False: No error
+                - 1 or True: General error
+                - 2: Controlled termination
+        """
+        return self._error_code
+
     def set_next_iteration(self, current_time=None, force=False):
 
         if current_time is None:
@@ -446,17 +472,19 @@ def init_logging(
 
 def format_tz(tz_str) -> str:
     # Format the timezone string to allow for shortcuts (PST, EST, etc...)
-    # if tz unknown, return UTC
+    # If tz unknown or invalid, return UTC
+    # If input is a timezone object, return its zone info
 
-    if tz_str == "PST":
-        tz = "US/Pacific"
+    if isinstance(tz_str, pytz.tzinfo.BaseTzInfo):
+        return tz_str.zone
+    elif tz_str == "PST":
+        return "US/Pacific"
     elif tz_str == "EST":
-        tz = "US/Eastern"
+        return "US/Eastern"
     elif tz_str in pytz.all_timezones:
-        tz = tz_str
+        return tz_str
     else:
-        tz = "UTC"
-    return tz
+        return "UTC"
 
 
 FRS_demo_params = {
@@ -495,6 +523,7 @@ FRS_demo_params = {
     "log_batt_aggregator": logging.INFO,
     "use_tmm": False,
     "use_adms_publisher": False,
+    "use_mpc_dispatch_controller": False,
 }
 
 
@@ -633,8 +662,8 @@ class input_data_processor(fastderms):
             "parameters": {"model_id": model_id},
         }
         topic = topics.CONFIG
-        gapps = GridAPPSD()
-        data_feeder = gapps.get_response(topic, message, timeout=180)
+        _gapps = GridAPPSD()
+        data_feeder = _gapps.get_response(topic, message, timeout=180)
         return data_feeder["data"]
 
     def get_substation_measurement_IDs(self, substation_node, subsation_line_name):

@@ -30,11 +30,6 @@ from gridappsd.topics import (
 app_name = "ADMS_Publisher"
 __version__ = "0.9"
 
-# Logger
-logger_name = "__ADMS__publisher"
-_log = logging.getLogger(logger_name)
-
-default_mrid = "ADMS"
 # The reference start time for the period of simulation, it is assumed to be in Pacific time.
 default_tz = "US/Pacific"
 # Timestep [s.]
@@ -43,6 +38,10 @@ default_timestep = 60
 default_iteration_offset = 0
 # simulation duration (in seconds)
 default_sim_length = -1
+
+# Logger
+logger_name = f"__{app_name}__"
+_logger = logging.getLogger(logger_name)
 
 
 class ADMSPublisher(object):
@@ -55,54 +54,56 @@ class ADMSPublisher(object):
 
         try:
             # Connect to GridAPPS-D Platform
-            gapps = GridAPPSD(simulation_id=simulation_id)
-            if not gapps.connected:
+            _gapps = GridAPPSD(simulation_id=simulation_id)
+            if not _gapps.connected:
                 raise ConnectionError("Failed to connect to GridAPPS-D")
         except Exception as e:
-            _log.error(e)
-            gapps = None
+            _logger.error(e)
+            _gapps = None
 
-        self._gapps = gapps
+        self._gapps = _gapps
         self._simulation_id = simulation_id
 
-        self.mrid = kw_args.get("mrid", default_mrid)
+        self.mrid = kw_args.get("mrid", app_name)
         self._simout_topic = simulation_output_topic(simulation_id)
         self._publish_to_topic = application_output_topic(self.mrid, None)
         self._automation_topic = kw_args.get(
             "automation_topic", service_input_topic("automation", simulation_id)
         )
 
-        _log.warning(f"subscribing to (internal):\n {self._simout_topic}")
-        _log.warning(f"publishing to:\n {self._publish_to_topic}")
+        _logger.warning(f"subscribing to (internal):\n {self._simout_topic}")
+        _logger.warning(f"publishing to:\n {self._publish_to_topic}")
 
         tz_str = kw_args.get("tz", default_tz)
         self.local_tz = pytz.timezone(tz_str)
-        _log.info(f"Initializing with local timezone: {self.local_tz}")
+        _logger.info(f"Initializing with local timezone: {self.local_tz}")
 
         self.iteration_offset = kw_args.get(
             "iteration_offset", default_iteration_offset
         )
-        _log.debug(f"Iteration offset set to {self.iteration_offset} s.")
+        _logger.debug(f"Iteration offset set to {self.iteration_offset} s.")
 
         tmstp_start = kw_args.get("tmstp_start", None)
         if tmstp_start is None:
             self.set_next_iteration(None, force=True)
-            _log.warning(f"Start time NOT provided, using first simulation output")
+            _logger.warning(f"Start time NOT provided, using first simulation output")
         else:
             self.set_next_iteration(tmstp_start, force=True)
-            _log.info(f"Start time is: {self.get_local_datetime(tmstp_start)}")
+            _logger.info(f"Start time is: {self.timestamp_to_datetime(tmstp_start)}")
 
         self.timestep = kw_args.get("message_period", default_timestep)
-        _log.info(f"Message period set to {self.timestep} s.")
+        _logger.info(f"Message period set to {self.timestep} s.")
 
         self.search_folder = Path(
             kw_args.get("search_folder", "./adms_input")
         ).resolve()
         self.search_folder.mkdir(parents=True, exist_ok=True)
-        _log.info(f"Folder for Inputs: {self.search_folder}")
+        _logger.info(f"Folder for Inputs: {self.search_folder}")
         self.processed_folder = self.search_folder / "processed"
         self.processed_folder.mkdir(parents=True, exist_ok=True)
-        _log.debug(f"Creating folder for processed files: {self.processed_folder.name}")
+        _logger.debug(
+            f"Creating folder for processed files: {self.processed_folder.name}"
+        )
 
         # Event List:
         self.event_list = kw_args.get("event_list", [])
@@ -112,7 +113,7 @@ class ADMSPublisher(object):
         self._error_code = False
         self._message_count = 0
 
-        _log.info("ADMS Publisher Initialized")
+        _logger.info("ADMS Publisher Initialized")
         self.send_gapps_message(self._automation_topic, {"command": "stop_task"})
 
     def running(self):
@@ -123,8 +124,91 @@ class ADMSPublisher(object):
     def error(self):
         return self._error_code
 
-    def get_local_datetime(self, timestamp):
-        return dt.datetime.fromtimestamp(timestamp).astimezone(self.local_tz)
+    def on_message(self, headers, message):
+        """Handle incoming messages on the simulation_output_topic for the simulation_id
+
+        Parameters
+        ----------
+        headers: dict
+            A dictionary of headers that could be used to determine topic of origin and
+            other attributes.
+        message: object
+            A data structure following the protocol defined in the message structure
+            of ``GridAPPSD``.  Most message payloads will be serialized dictionaries, but that is
+            not a requirement.
+        """
+
+        _logger.debug(f"Received message on topic: {headers['destination']}")
+        message_timestamp = int(headers["timestamp"]) / 1000
+
+        try:
+            # SIMOUT Message
+            if self._simout_topic in headers["destination"]:
+                # Simulation Output Received
+                simulation_timestamp = message["message"]["timestamp"]
+                _logger.info(
+                    f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}"
+                )
+
+                if self.next_iteration is None:
+                    _logger.warning(
+                        "Next iteration is None, starting execution at first simulation message"
+                    )
+                    self.next_iteration = self.timestamp_to_datetime(
+                        simulation_timestamp
+                    )
+                    self.next_offset_timestamp = self.get_offset_timestamp(
+                        self.next_iteration
+                    )
+
+                if simulation_timestamp >= self.next_offset_timestamp:
+                    # SIMOUT message is for the next iteration, process it
+                    _logger.debug(
+                        f"Time is {self.next_iteration}, let's check for new ADMS messages"
+                    )
+
+                    # Check for new ADMS messages
+                    self.check_and_publish_adms_message()
+
+                    # Iteration is now complete, Set the next iteration
+                    self.set_next_iteration(simulation_timestamp)
+
+                else:
+                    _logger.debug(
+                        f"Waiting until next Iteration at {self.timestamp_to_datetime(self.next_offset_timestamp)}"
+                    )
+
+                if simulation_timestamp >= self.next_event[0]:
+                    self._message_count += 1
+                    _logger.info(
+                        f"Simulation time: {simulation_timestamp}, event nr {int(self._message_count)}, event time: {self.next_event[0]}"
+                    )
+                    self.add_adms_file(self.next_event[1])
+                    self.set_next_event()
+                else:
+                    if not np.isnan(self.next_event[0]):
+                        _logger.debug(
+                            f"Waiting until next Event at {self.timestamp_to_datetime(self.next_event[0])}"
+                        )
+
+        except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            _logger.error(
+                f"Error on line {exc_tb.tb_lineno}: {repr(e)},\n{exc_type}, {exc_obj}"
+            )
+            self._error_code = True
+            raise
+
+    def timestamp_to_datetime(self, timestamp):
+        try:
+            local_dt = dt.datetime.fromtimestamp(timestamp).astimezone(self.local_tz)
+        except:
+            if not np.isnan(timestamp):
+                _logger.error(f"Could not convert timestamp {timestamp} to datetime.")
+            else:
+                _logger.info(f"Received NaN timestamp.")
+            local_dt = dt.datetime(1970, 1, 1, 0, 0, 0)
+        return local_dt
 
     def set_next_iteration(self, current_time=None, force=False):
 
@@ -141,7 +225,7 @@ class ADMSPublisher(object):
             else:
                 # Case of timestamp
                 current_timestamp = current_time
-                current_time = self.get_local_datetime(current_time)
+                current_time = self.timestamp_to_datetime(current_time)
 
             if force:
                 # Force the next iteration to be the current time
@@ -155,7 +239,7 @@ class ADMSPublisher(object):
                 self.next_iteration += dt.timedelta(seconds=n_timestep * self.timestep)
             # Set next offset timestamp
             self.next_offset_timestamp = self.get_offset_timestamp()
-            _log.debug(f"Next iteration is: {self.next_iteration}")
+            _logger.debug(f"Next iteration is: {self.next_iteration}")
 
     def get_offset_timestamp(self, datetime=None):
         try:
@@ -175,33 +259,33 @@ class ADMSPublisher(object):
             for key in message.keys():
                 out_message[key] = message[key]
         except:
-            _log.info("Message is not a dictionary")
+            _logger.info("Message is not a dictionary")
             out_message["message"] = message
         finally:
             try:
                 if self._gapps is None:
                     raise Exception(" No GAPPS: Cannot send message")
                 self._gapps.send(topic, json.dumps(out_message))
-                _log.info(f"Sent message to topic {topic} at {dt.datetime.now()}")
-                _log.debug(f"Message Content: {out_message}")
+                _logger.info(f"Sent message to topic {topic} at {dt.datetime.now()}")
+                _logger.debug(f"Message Content: {out_message}")
                 return True
             except Exception as e:
-                _log.error(
+                _logger.error(
                     f"Failed to send message to topic {topic} at {dt.datetime.now()}"
                 )
-                _log.error(e)
+                _logger.error(e)
                 return False
 
     def check_and_publish_adms_message(self):
         # List files in the search folder
         files = list(self.search_folder.glob("*.csv"))
-        _log.debug(f"Found {len(files)} files in {self.search_folder}")
+        _logger.debug(f"Found {len(files)} files in {self.search_folder}")
 
         current_time_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
         for file in files:
             # Parse file and push it to Gridapps
-            _log.debug(f"Processing file: {file}")
+            _logger.debug(f"Processing file: {file}")
             # Normalize by removing any secondary extension
             base_stem = re.sub(
                 r"\.[^.]+$", "", file.stem
@@ -230,92 +314,20 @@ class ADMSPublisher(object):
         try:
             file_path = Path(file_path).resolve()
             shutil.copy(file_path, self.search_folder)
-            _log.info(f"Added file {file_path.name} to Input Folder")
+            _logger.info(f"Added file {file_path.name} to Input Folder")
 
         except Exception as e:
-            _log.error(f"Failed to add file {file_path} to Input Folder")
-            _log.error(repr(e))
+            _logger.error(f"Failed to add file {file_path} to Input Folder")
+            _logger.error(repr(e))
 
     def set_next_event(self):
         # Events are tuples of timestamp and file_path of file to copy in input folder
         self.next_event = self.event_list.pop(0) if self.event_list else (np.nan, "")
-        _log.debug(f"Next Event: \n{self.next_event}")
-
-    def on_message(self, headers, message):
-        """Handle incoming messages on the simulation_output_topic for the simulation_id
-
-        Parameters
-        ----------
-        headers: dict
-            A dictionary of headers that could be used to determine topic of origin and
-            other attributes.
-        message: object
-            A data structure following the protocol defined in the message structure
-            of ``GridAPPSD``.  Most message payloads will be serialized dictionaries, but that is
-            not a requirement.
-        """
-
-        _log.debug(f"Received message on topic: {headers['destination']}")
-        message_timestamp = int(headers["timestamp"]) / 1000
-
-        try:
-            # SIMOUT Message
-            if self._simout_topic in headers["destination"]:
-                simulation_timestamp = message["message"]["timestamp"]
-                _log.debug(
-                    f"Processing message from simulation output for {self.get_local_datetime(simulation_timestamp)}"
-                )
-
-                if self.next_iteration is None:
-                    _log.debug(
-                        "Next iteration is None, starting execution at first simulation message"
-                    )
-                    self.next_iteration = self.get_local_datetime(simulation_timestamp)
-                    self.next_offset_timestamp = self.get_offset_timestamp(
-                        self.next_iteration
-                    )
-
-                if simulation_timestamp >= self.next_offset_timestamp:
-                    # SIMOUT message is for the next iteration, process it
-                    self._message_count += 1
-                    _log.info(
-                        f"Control iteration {int(self._message_count)} for time: {self.next_iteration}"
-                    )
-
-                    # Check for new ADMS messages
-                    self.check_and_publish_adms_message()
-
-                    # Iteration is now complete, Set the next iteration
-                    self.set_next_iteration(simulation_timestamp)
-
-                else:
-                    _log.info(
-                        f"SIMOUT message received at {self.get_local_datetime(simulation_timestamp)}, waiting until {self.get_local_datetime(self.next_offset_timestamp)}"
-                    )
-
-                if simulation_timestamp >= self.next_event[0]:
-                    _log.debug(
-                        f"Simulation time: {simulation_timestamp}, event time: {self.next_event[0]}"
-                    )
-                    self.add_adms_file(self.next_event[1])
-                    self.set_next_event()
-                else:
-                    if not np.isnan(self.next_event[0]):
-                        _log.debug(
-                            f"Waiting till {self.get_local_datetime(self.next_event[0])}"
-                        )
-
-        except Exception as e:
-            exc_type, exc_obj, exc_tb = sys.exc_info()
-            _log.error(
-                f"Error on line {exc_tb.tb_lineno}: {repr(e)},\n{exc_type}, {exc_obj}"
-            )
-            self._error_code = True
-            raise
+        _logger.debug(f"Next Event: \n{self.next_event}")
 
 
 ########################### Main Program
-if __name__ == "__main__":
+def _main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "simulation_id", help="Simulation id to use for responses on the message bus."
@@ -355,7 +367,7 @@ if __name__ == "__main__":
     if not any(handler._name in ["console"] for handler in root_logger.handlers):
         root_logger.addHandler(console)
 
-    _log.setLevel(log_level)
+    _logger.setLevel(log_level)
 
     ############## Individual Logger
     log_filename = Path(path_to_logs) / "_log_ADMS_publisher.log"
@@ -372,31 +384,31 @@ if __name__ == "__main__":
         root_logger.addHandler(debug_file)
     ############### END OF INDIVIDUAL LOG FILE
 
-    _log.warning(
+    _logger.warning(
         "ADMS Publisher Starting!!!-------------------------------------------"
     )
 
     simulation_id = opts.simulation_id
 
-    gapps = GridAPPSD(simulation_id=simulation_id)
-    if gapps.connected:
-        _log.debug(f"GridAPPSD connected to simulation {simulation_id}")
+    _gapps = GridAPPSD(simulation_id=simulation_id)
+    if _gapps.connected:
+        _logger.debug(f"GridAPPSD connected to simulation {simulation_id}")
     else:
-        _log.error("GridAPPSD not Connected")
+        _logger.error("GridAPPSD not Connected")
 
     adms_publisher = ADMSPublisher(simulation_id, **app_config)
 
     # Subscribing to Simulation Output
     sim_out_topic = simulation_output_topic(simulation_id)
-    gapps.subscribe(sim_out_topic, adms_publisher)
+    _gapps.subscribe(sim_out_topic, adms_publisher)
 
-    _log.warning(f"subscribing to (main):\n {sim_out_topic}")
+    _logger.warning(f"subscribing to (main):\n {sim_out_topic}")
 
-    sim_time = sim_time = app_config.get("sim_time", -1)
+    sim_time = app_config.get("sim_time", -1)
     if sim_time == -1:
-        _log.info(f"Info received from remote: sim_time - until termination")
+        _logger.info(f"Info received from remote: sim_time - until termination")
     else:
-        _log.info(f"Info received from remote: sim_time {sim_time} seconds")
+        _logger.info(f"Info received from remote: sim_time {sim_time} seconds")
 
     elapsed_time = 0
     time_to_sleep = 0.1
@@ -404,12 +416,18 @@ if __name__ == "__main__":
 
         if not adms_publisher.running():
             if adms_publisher.error() == 2:
-                _log.warning("ADMS Publisher Terminated")
+                _logger.warning("ADMS Publisher Terminated")
             else:
-                _log.error("ADMS Publisher Failed")
+                _logger.error("ADMS Publisher Failed")
             break
 
         elapsed_time += time_to_sleep
         time.sleep(time_to_sleep)
 
-    _log.warning("ADMS Publisher finished!!!------------------------------------------")
+    _logger.warning(
+        "ADMS Publisher finished!!!------------------------------------------"
+    )
+
+
+if __name__ == "__main__":
+    _main()

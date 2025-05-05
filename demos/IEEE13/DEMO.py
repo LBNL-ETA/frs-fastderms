@@ -12,6 +12,7 @@ cases["2"] = "PV_BATT_TMM"
 cases["3"] = "PV_BATT_ADMS_POWER"
 cases["4"] = "PV_BATT_ADMS_VOLTAGE"
 cases["5"] = "PV_BATT_ADMS_POWER_TMM"
+cases["6"] = "PV_BATT_MICROGRID"
 
 path_to_here = Path(__file__).resolve().parent
 path_to_demos = path_to_here / ".."

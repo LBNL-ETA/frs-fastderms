@@ -11,6 +11,7 @@ import FAST_DERMS_CONTROL.MPC.MPCclass as MPCc
 from FAST_DERMS_CONTROL.common import (
     fastderms_app,
     init_logging,
+    format_tz,
     Pyomo_Exception,
     Implementation_Exception,
 )
@@ -30,13 +31,16 @@ import pytz
 import os
 import sys
 
+# App Name
+app_name = "Orchestrator"
+__version__ = "0.9"
+
+# Topics
 default_FRS_mrid = "FRS"
 
 # Network Data
 default_file_static_data = "IO13_gonogo_static_data.json"
 default_file_fcast_data = "IO13_gonogo_fcast_data.pkl"
-
-logger_name = "__Main__Orchestrator"
 
 # The reference start time for the period of simulation, it is assumed to be in Pacific time
 next_day = dt.datetime(2022, 4, 1, 0, 0, 0)
@@ -59,6 +63,7 @@ default_opt_R_dist["R_sigma_dn"] = 1.5
 default_adms_mrid = "ADMS"
 default_adms_strptime = "%a, %b %d %H:%M"
 
+logger_name = f"__Main__{app_name}"
 _main_logger = logging.getLogger(logger_name)
 
 
@@ -145,8 +150,8 @@ class Orchestrator(fastderms_app):
 
         self._orchestrator_topic = self.IOs.service_topic(self.mrid, "input")
 
-        self._adms_topic = kw_args.get(
-            "adms_topic", self.IOs.application_topic(default_adms_mrid, "output")
+        self._adms_topic = self.IOs.application_topic(
+            kw_args.get("adms_topic", default_adms_mrid), "output"
         )
 
         self._publish_DA_topic = self.IOs.application_topic(
@@ -173,33 +178,9 @@ class Orchestrator(fastderms_app):
         self._MPC_ON = False
         self._MPC_run_count = 0
         self.MPC_options = {}
-        self._error_code = False
 
         self.logger.warning("Orchestrator Initialized")
         self.IOs.send_gapps_message(self._automation_topic, {"command": "stop_task"})
-
-    def running(self):
-        """
-        Check if the orchestrator is running without errors.
-
-        Returns:
-            bool: True if the orchestrator is running without errors, False otherwise. The status is determined by checking if there's no error code set.
-        """
-        # Check if any error code
-        running = not bool(self._error_code)
-        return running
-
-    def error(self):
-        """
-        Get the current error code of the orchestrator.
-
-        Returns:
-            int or bool: The error code value. Possible values:
-                - 0 or False: No error
-                - 1 or True: General error
-                - 2: Controlled termination
-        """
-        return self._error_code
 
     def on_message(self, headers, message):
         """
@@ -244,7 +225,6 @@ class Orchestrator(fastderms_app):
         - ADMS messages are only processed when MPC is running
         - Error handling includes logging of line numbers and error details
         """
-        self.logger.debug(f"Received message on topic: {headers['destination']}")
         message_timestamp = int(headers["timestamp"]) / 1000
         self.logger.debug(f"Message timestamp: {message_timestamp}")
 
@@ -329,10 +309,13 @@ class Orchestrator(fastderms_app):
             elif self._simout_topic in headers["destination"]:
                 # Simulation Output Received
                 simulation_timestamp = message["message"]["timestamp"]
+                self.logger.info(
+                    f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}"
+                )
                 # Case to run the MPC Problem every MPC_period
                 if self._MPC_ON:
                     if self.next_iteration is None:
-                        self.logger.debug(
+                        self.logger.warning(
                             "Next iteration is None, executing at first simulation output"
                         )
                         self.set_next_iteration(simulation_timestamp, force=True)
@@ -352,15 +335,14 @@ class Orchestrator(fastderms_app):
                         # Set iterations
                         self.set_next_iteration(simulation_timestamp)
                     else:
-                        self.logger.info(
-                            f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}, waiting until {self.timestamp_to_datetime(self.next_offset_timestamp)}"
+                        self.logger.debug(
+                            f"Waiting until next Iteration at {self.timestamp_to_datetime(self.next_offset_timestamp)}"
                         )
                 else:
-                    self.logger.debug(
-                        f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}, MPC is not running"
-                    )
+                    self.logger.debug(f"MPC is not running")
 
             elif self._adms_topic in headers["destination"]:
+                self.logger.debug(f"Processing ADMS message")
                 # ADMS message Received
                 if self._MPC_ON:
                     # Only process ADMS message if MPC is running
@@ -1295,30 +1277,24 @@ if __name__ == "__main__":
         "Orchestrator starting!!!-------------------------------------------------------"
     )
 
-    sim_id = opts.simulation_id
-    _main_logger.debug(f"Info received from remote: Simulation ID {sim_id}")
+    simulation_id = opts.simulation_id
+    _main_logger.debug(f"Info received from remote: Simulation ID {simulation_id}")
 
     model_mrid = sim_request["power_system_config"]["Line_name"]
     _main_logger.debug(f"Info received from remote: Model ID {model_mrid}")
 
-    tz = app_config.get("tz", "PST")
-    if tz == "PST":
-        tz = "US/Pacific"
-    elif tz == "EST":
-        tz = "US/Eastern"
-
-    tz = pytz.timezone(tz)
-    _main_logger.debug(f"Info received from remote: timezone {tz}")
+    tz_str = format_tz(app_config.get("tz", "PST"))
+    _main_logger.debug(f"Info received from remote: timezone {tz_str}")
 
     use_gapps = app_config.get("use_GAPPS", True)
     if use_gapps:
-        gapps = GridAPPSD(simulation_id=sim_id)
-        if gapps.connected:
-            _main_logger.debug(f"GridAPPSD connected to simulation {sim_id}")
+        _gapps = GridAPPSD(simulation_id=simulation_id)
+        if _gapps.connected:
+            _main_logger.debug(f"GridAPPSD connected to simulation {simulation_id}")
         else:
             _main_logger.error("GridAPPSD not Connected")
     else:
-        gapps = None
+        _gapps = None
         _main_logger.warning("No GridAPPSD connection")
 
     file_all_data = app_config.get("file_all_data", None)
@@ -1348,31 +1324,33 @@ if __name__ == "__main__":
 
     # Instantiate IO module
     IO = IObackup(
-        simulation_id=sim_id,
+        simulation_id=simulation_id,
         model_id=model_mrid,
         path_to_repo=path_to_repo,
         path_to_export=path_to_export,
         path_to_archive=path_to_archive,
-        tz=tz,
+        tz=tz_str,
         **kw_args,
     )
 
     # Instantiate the Orchestrator
     orchestrator = Orchestrator(
-        model_id=model_mrid, IOmodule=IO, name=logger_name, local_tz=tz, **app_config
+        model_id=model_mrid, IOmodule=IO, name=logger_name, **app_config
     )
 
     # Subscriptions
     # Orchestrator input for commands
     FRS_mrid = app_config.get("mrid", default_FRS_mrid)
     input_topic = IO.service_topic(FRS_mrid, "input")
-    gapps.subscribe(input_topic, orchestrator)
+    _gapps.subscribe(input_topic, orchestrator)
     # Simout
     simout_topic = IO.simulation_topic("output")
-    gapps.subscribe(simout_topic, orchestrator)
+    _gapps.subscribe(simout_topic, orchestrator)
     # ADMS Output
-    adms_topic = app_config.get("adms_topic", IO.application_topic("ADMS", "output"))
-    gapps.subscribe(adms_topic, orchestrator)
+    adms_topic = IO.application_topic(
+        app_config.get("adms_topic", default_adms_mrid), "output"
+    )
+    _gapps.subscribe(adms_topic, orchestrator)
 
     _main_logger.debug(
         f"[Main] Orchestrator subscribed to: \n{simout_topic} \n{input_topic} \n{adms_topic}"

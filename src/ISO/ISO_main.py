@@ -29,10 +29,6 @@ __version__ = "0.9"
 
 default_ISO_mrid = "ISO"
 
-# Logger
-logger_name = f"__Main__{app_name}"
-_main_logger = logging.getLogger(logger_name)
-
 ## Default values
 # The reference start time for the period of simulation, it is assumed to be in Pacific time.
 default_tz = "US/Pacific"
@@ -54,6 +50,10 @@ Add_reserve_dispatch = False
 default_timestep = 60
 # simulation duration (in seconds)
 default_sim_length = 24 * 60 * 60
+
+# Logger
+logger_name = f"__Main__{app_name}"
+_main_logger = logging.getLogger(logger_name)
 
 
 class mockISO(fastderms_app):
@@ -92,7 +92,6 @@ class mockISO(fastderms_app):
 
         # Inittializing App variables
         self.RTPriceDF = None
-        self._error_code = False
         self.RT_ON = False
         self._message_count = 0
 
@@ -101,14 +100,6 @@ class mockISO(fastderms_app):
             "automation_topic", self.IOs.service_topic("automation", "input")
         )
         self.IOs.send_gapps_message(self._automation_topic, {"command": "stop_task"})
-
-    def running(self):
-        # Check if any error code
-        running = not bool(self._error_code)
-        return running
-
-    def error(self):
-        return self._error_code
 
     def on_message(self, headers, message):
         """Handle incoming messages on the simulation_output_topic for the simulation_id
@@ -122,7 +113,6 @@ class mockISO(fastderms_app):
             of ``GridAPPSD``. Most message payloads will be serialized dictionaries, but that is
             not a requirement.
         """
-        self.logger.debug(f"Received message on topic: {headers['destination']}")
 
         try:
 
@@ -219,10 +209,14 @@ class mockISO(fastderms_app):
 
             # SIMOUT message
             elif self._simout_topic in headers["destination"]:
+                # Simulation Output Received
+                simulation_timestamp = message["message"]["timestamp"]
+                self.logger.info(
+                    f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}"
+                )
+
                 # Case to run the ISO dispatch
                 # starting after t_start and iterating every timestep
-                simulation_timestamp = message["message"]["timestamp"]
-
                 if self.RT_ON and (simulation_timestamp >= self.next_offset_timestamp):
 
                     self._message_count += 1
@@ -251,13 +245,11 @@ class mockISO(fastderms_app):
 
                 else:
                     if self.RT_ON:
-                        self.logger.info(
-                            f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}, waiting until {self.timestamp_to_datetime(self.next_offset_timestamp)}"
+                        self.logger.debug(
+                            f"Waiting until next Iteration at {self.timestamp_to_datetime(self.next_offset_timestamp)}"
                         )
                     else:
-                        self.logger.debug(
-                            f"SIMOUT message received at {self.timestamp_to_datetime(simulation_timestamp)}, but RT dispatch is OFF"
-                        )
+                        self.logger.debug(f"RT dispatch is OFF")
 
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()
@@ -854,8 +846,8 @@ def _main():
         "Mock ISO starting!!!-------------------------------------------------------"
     )
 
-    sim_id = opts.simulation_id
-    _main_logger.debug(f"Info received from remote: Simulation ID {sim_id}")
+    simulation_id = opts.simulation_id
+    _main_logger.debug(f"Info received from remote: Simulation ID {simulation_id}")
 
     time_multiplier = app_config.get("time_multiplier", 1)
     if time_multiplier != 1:
@@ -865,7 +857,7 @@ def _main():
         _main_logger.warning(f"New message period is {message_period}")
         app_config.update({"message_period": message_period})
 
-    gapps = GridAPPSD()
+    _gapps = GridAPPSD()
     file_all_data = app_config.get("file_all_data", None)
     kw_args = {}
     if file_all_data is not None:
@@ -891,7 +883,7 @@ def _main():
 
     # Instantiate IO module
     IO = IObackup(
-        simulation_id=sim_id,
+        simulation_id=simulation_id,
         path_to_repo=path_to_repo,
         path_to_export=path_to_export,
         **kw_args,
@@ -902,12 +894,12 @@ def _main():
     # All ther subscriptions:
     # SIM Output
     simout_topic = IO.simulation_topic("output")
-    gapps.subscribe(simout_topic, mock_iso)
+    _gapps.subscribe(simout_topic, mock_iso)
 
     # ISO input for commands
     ISO_mrid = app_config.get("mrid", default_ISO_mrid)
     input_topic = IO.service_topic(ISO_mrid, "input")
-    gapps.subscribe(input_topic, mock_iso)
+    _gapps.subscribe(input_topic, mock_iso)
 
     sim_time = app_config.get("sim_time", default_sim_length)
 

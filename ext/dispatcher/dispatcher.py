@@ -23,7 +23,7 @@ app_name = "Dispatcher"
 __version__ = "0.9"
 
 # Topics
-default_FRS_topic = "FRS"
+default_FRS_topic = "FRS_RT_Control"
 
 # Default Values
 # simulation duration (in hours)
@@ -41,38 +41,59 @@ default_PV_list = {
 
 # Logger
 logger_name = f"__Main__{app_name}"
-_main_logger = logging.getLogger(logger_name)
+_logger = logging.getLogger(logger_name)
 
 
 class Dispatcher(object):
 
-    def __init__(self, gapps, sim_id, **kw_args):
+    def __init__(self, simulation_id, **kw_args):
         """
         Create a new Dispatcher object
         """
-        self.logger = logging.getLogger(logger_name)
+        self.mrid = kw_args.get("mrid", app_name)
+        # Re-authenticate with GridAPPS-D (the java security token doesn't get inherited well)
+        os.environ["GRIDAPPSD_APPLICATION_ID"] = self.mrid
+        os.environ["GRIDAPPSD_APPLICATION_STATUS"] = "STARTED"
+        os.environ["GRIDAPPSD_USER"] = "app_user"
+        os.environ["GRIDAPPSD_PASSWORD"] = "1234App"
 
-        self._message_count = 0
-        self.gapps = gapps
-        self.sim_id = sim_id
+        try:
+            # Connect to GridAPPS-D Platform
+            _gapps = GridAPPSD(simulation_id=simulation_id)
+            if not _gapps.connected:
+                raise ConnectionError("Failed to connect to GridAPPS-D")
+        except Exception as e:
+            _logger.error(e)
+            _gapps = None
+
+        self._gapps = _gapps
+        self._simulation_id = simulation_id
 
         FRS_topic = kw_args.get("FRS_topic", default_FRS_topic)
-        self.frs_control_topic = application_output_topic(
-            f"{FRS_topic}_RT_Control", None
-        )
-        self.logger.warning(f"subscribing to:\n {self.frs_control_topic}")
-        self._publish_to_topic = simulation_input_topic(sim_id)
-        self.logger.warning(f"publishing to:\n {self._publish_to_topic}")
+        self.frs_control_topic = application_output_topic(FRS_topic, None)
+        _logger.warning(f"subscribing to:\n {self.frs_control_topic}")
+        self._publish_to_topic = simulation_input_topic(simulation_id)
+        _logger.warning(f"publishing to:\n {self._publish_to_topic}")
         self._automation_topic = kw_args.get(
-            "automation_topic", service_input_topic("automation", sim_id)
+            "automation_topic", service_input_topic("automation", simulation_id)
         )
 
         self.PV_list = kw_args.get("PV_list", default_PV_list)
         self.BATT_list = kw_args.get("BATT_list", default_BATT_list)
 
-        self.status = True
-        self.logger.info("Dispatcher Initialized")
+        # initialize all the variables:
+        self._error_code = False
+        self._message_count = 0
+        _logger.info("Dispatcher Initialized")
         self.send_gapps_message(self._automation_topic, {"command": "stop_task"})
+
+    def running(self):
+        # Check if any error code
+        running = not bool(self._error_code)
+        return running
+
+    def error(self):
+        return self._error_code
 
     def on_message(self, headers, message):
         """Handle incoming messages on the simulation_output_topic for the simulation_id
@@ -86,14 +107,17 @@ class Dispatcher(object):
             of ``GridAPPSD``. Most message payloads will be serialized dictionaries, but that is
             not a requirement.
         """
-        self.logger.debug(f"Received message on topic: {headers['destination']}")
+        _logger.debug(f"Received message on topic: {headers['destination']}")
 
         message_timestamp = int(headers["timestamp"]) / 1000
         try:
             # RT controller message
             if self.frs_control_topic in headers["destination"]:
-                self.logger.info(f"Processing message from RT controller")
-                self.logger.debug(message.keys())
+                self._message_count += 1
+                _logger.info(
+                    f"Processing message nr {int(self._message_count)} from RT controller"
+                )
+                _logger.debug(message.keys())
 
                 setpoints = {}
                 for data_dict in message["message"]:
@@ -105,8 +129,11 @@ class Dispatcher(object):
                 self.dispatch_der(setpoints)
 
         except Exception as e:
-            self.logger.error(f"Error: {e}")
-            self.status = False
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            _logger.error(
+                f"Error on line {exc_tb.tb_lineno}: {repr(e)},\n{exc_type}, {exc_obj}"
+            )
+            self._error_code = True
             raise
 
     def dispatch_der(self, der_rt_control_data):
@@ -116,9 +143,9 @@ class Dispatcher(object):
         :param der_rt_control_data: der_rt_control data
         :return:
         """
-        self.logger.debug(der_rt_control_data)
+        _logger.debug(der_rt_control_data)
         # dispatch the der_rt_control data to the simulation engine
-        FRS_diffs = DifferenceBuilder(self.sim_id)
+        FRS_diffs = DifferenceBuilder(self._simulation_id)
         for resourceID, setpoint in der_rt_control_data.items():
             # converting setpoint to kW to match the units of the simulation engine
             setpoint = int(setpoint * 1000)
@@ -149,11 +176,11 @@ class Dispatcher(object):
                     0.0,
                 )
                 # FRS_diffs.add_difference(resourceID, "PowerElectronicsConnection.q", setpoint, 0)
-        self.logger.info("Dispatching der_rt_control data to the simulation engine")
+        _logger.info("Dispatching der_rt_control data to the simulation engine")
         message = json.dumps(FRS_diffs.get_message())
-        self.logger.debug(f"Publishing message to topic: {self._publish_to_topic}")
-        self.logger.debug(message)
-        self.gapps.send(self._publish_to_topic, message)
+        _logger.debug(f"Publishing message to topic: {self._publish_to_topic}")
+        _logger.debug(message)
+        self._gapps.send(self._publish_to_topic, message)
 
     def send_gapps_message(self, topic, message):
         out_message = {}
@@ -161,26 +188,25 @@ class Dispatcher(object):
             for key in message.keys():
                 out_message[key] = message[key]
         except:
-            self.logger.info("Message is not a dictionary")
+            _logger.info("Message is not a dictionary")
             out_message["message"] = message
         finally:
             try:
-                if self.gapps is None:
+                if self._gapps is None:
                     raise Exception("No GAPPS: Cannot send message")
-                self.gapps.send(topic, json.dumps(out_message))
-                self.logger.info(
-                    f"Sent message to topic {topic} at {dt.datetime.now()}"
-                )
-                self.logger.debug(f"Message Content: {out_message}")
+                self._gapps.send(topic, json.dumps(out_message))
+                _logger.info(f"Sent message to topic {topic} at {dt.datetime.now()}")
+                _logger.debug(f"Message Content: {out_message}")
                 return True
             except Exception as e:
-                self.logger.error(
+                _logger.error(
                     f"Failed to send message to topic {topic} at {dt.datetime.now()}"
                 )
-                self.logger.error(e)
+                _logger.error(e)
                 return False
 
 
+########################### Main Program
 def _main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -220,45 +246,63 @@ def _main():
     if not any(handler._name in ["console"] for handler in root_logger.handlers):
         root_logger.addHandler(console)
 
-    _main_logger.setLevel(log_level)
-    _main_logger.warning(
+    _logger.setLevel(log_level)
+
+    ############## Individual Logger
+    log_filename = Path(path_to_logs) / "_log_Dispatcher.log"
+    debug_file = logging.FileHandler(log_filename)
+    debug_file.setLevel(log_level)
+    debug_file._name = "individual_log"
+    debug_format = logging.Formatter(
+        "%(levelname)-8s %(asctime)s | %(name)-12s: %(message)s"
+    )
+    debug_file.setFormatter(debug_format)
+    root_logger = logging.getLogger()
+
+    if not any(handler._name in ["individual_log"] for handler in root_logger.handlers):
+        root_logger.addHandler(debug_file)
+    ############### END OF INDIVIDUAL LOG FILE
+
+    _logger.warning(
         "Dispatcher starting!!!-------------------------------------------------------"
     )
 
     simulation_id = opts.simulation_id
-    model_id = sim_request["power_system_config"]["Line_name"]
-    _main_logger.debug(f"Model mrid is: {model_id}")
 
-    gapps = GridAPPSD(simulation_id=simulation_id)
-    if gapps.connected:
-        _main_logger.debug(f"GridAPPSD connected to simulation {simulation_id}")
+    _gapps = GridAPPSD(simulation_id=simulation_id)
+    if _gapps.connected:
+        _logger.debug(f"GridAPPSD connected to simulation {simulation_id}")
     else:
-        _main_logger.error("GridAPPSD not Connected")
-        gapps = None
+        _logger.error("GridAPPSD not Connected")
 
-    dispatcher = Dispatcher(gapps, simulation_id, **app_config)
+    dispatcher = Dispatcher(simulation_id, **app_config)
 
+    # Subscribing to FRS Control
     FRS_topic = app_config.get("FRS_topic", default_FRS_topic)
-    rt_topic = application_output_topic(f"{FRS_topic}_RT_Control", None)
-    gapps.subscribe(rt_topic, dispatcher)
+    control_topic = application_output_topic(FRS_topic, None)
+    _gapps.subscribe(control_topic, dispatcher)
+    _logger.warning(f"subscribing to (main):\n {control_topic}")
 
-    sim_time = sim_time = app_config.get("sim_time", default_sim_length)
+    sim_time = app_config.get("sim_time", default_sim_length)
     if sim_time == -1:
-        _main_logger.info(f"Info received from remote: sim_time - until termination")
+        _logger.info(f"Info received from remote: sim_time - until termination")
     else:
-        _main_logger.info(f"Info received from remote: sim_time {sim_time} seconds")
+        _logger.info(f"Info received from remote: sim_time {sim_time} seconds")
 
     elapsed_time = 0
     time_to_sleep = 0.1
     while elapsed_time < sim_time or sim_time == -1:
 
-        if not dispatcher.status:
-            _main_logger.error("Dispatcher failed")
+        if not dispatcher.running():
+            if dispatcher.error() == 2:
+                _logger.warning("Dispatcher Terminated")
+            else:
+                _logger.error("Dispatcher Failed")
             break
 
         elapsed_time += time_to_sleep
         time.sleep(time_to_sleep)
-    _main_logger.warning(
+    _logger.warning(
         "Dispatcher finished!!!-------------------------------------------------------"
     )
 

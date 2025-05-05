@@ -28,9 +28,9 @@ The following were added to the feeder:
     * PV3 at bus 671 with 375 kW
 * Utility Scale Battery:
     * BAT1 at bus 692 with 700 kW (in green on Figure)
-    * BAT2 at bus 634 with 150 kW (in blue on Figure)
     * BAT3 at bus 646 with 140 kW (in black on Figure)
 * Aggregated behind the meter Batteries:
+    * BAT2 at bus 634 with 150 kW (in blue on Figure)
     * BAT4 at buses 611, 645, and 675 with 240 kW (in grey on Figure)
     * BAT5 at buses 611, 646, 652, 675, and 692 with 170 kW (in light brown on Figure)
 

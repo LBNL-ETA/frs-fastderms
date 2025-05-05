@@ -51,22 +51,22 @@ class IOgapps(IOmodule):
             if simulation_id == fake_simulation_id:
                 raise Exception("GridAPPS-D is not used in this simulation")
 
-            gapps = GridAPPSD(simulation_id=simulation_id)
-            if not gapps.connected:
+            _gapps = GridAPPSD(simulation_id=simulation_id)
+            if not _gapps.connected:
                 raise ConnectionError("Failed to connect to GridAPPS-D")
 
         except Exception as e:
             self.logger.error(e)
-            gapps = None
+            _gapps = None
 
-        self._gapps = gapps
+        self._gapps = _gapps
 
         self._simulation_id = simulation_id
 
         self.results = {}
         self.logger.warning("IOgapps Initialized")
 
-    def get_sim_id(self) -> str:
+    def get_simulation_id(self) -> str:
         return self._simulation_id
 
     def simulation_topic(self, topic_type: str) -> str:

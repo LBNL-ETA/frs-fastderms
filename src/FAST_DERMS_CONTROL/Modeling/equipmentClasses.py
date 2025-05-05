@@ -500,6 +500,9 @@ class CompositeResource(CIMcomponent, Forecast):
     def __init__(self, DER_ids, Load_ids, *args, **kw_args) -> None:
         # Forward module name to parent class
         kw_args.update({"name": kw_args.get("name", __name__)})
+        # For now we don't include any forecast type in the composite resource itself
+        kw_args.update({"forecast_type": []})
+
         super().__init__(*args, **kw_args)
 
         # DERs

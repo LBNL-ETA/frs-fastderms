@@ -58,5 +58,5 @@ html_static_path = ["_static"]
 
 rst_prolog = """
 .. |frs_repo| replace:: https://github.com/LBNL-ETA/frs-fastderms
-.. |frs_shared_data_folder| replace:: https://drive.google.com/drive/folders/1
+.. |frs_shared_data_folder| replace:: https://doi.org/10.5281/zenodo.15344843
 """

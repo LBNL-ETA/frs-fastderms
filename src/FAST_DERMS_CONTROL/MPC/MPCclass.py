@@ -269,19 +269,56 @@ class ModelPredict(OptEngine):
         CR_data = {}
         for resource in Net.get_composite_resources():
             total_setpoint = [0 for frame_idx in model.T]
+            total_setpoint_q = [0 for frame_idx in model.T]
             # DERs
             for derID in resource.get_DER_ids():
+                self.logger.debug(f"Adding {derID} to {resource.getID()}")
                 # Removing DER from MPC data
                 der = DER_data.pop(derID)
-                total_setpoint += der["p_set"]
+                self.logger.debug(f"P {der['p_set']} \nQ {der['q_set']}")
+                total_setpoint = [
+                    input_setpoint + der_setpoint
+                    for input_setpoint, der_setpoint in zip(
+                        total_setpoint, der["p_set"]
+                    )
+                ]
+                total_setpoint_q = [
+                    input_setpoint + der_setpoint
+                    for input_setpoint, der_setpoint in zip(
+                        total_setpoint_q, der["q_set"]
+                    )
+                ]
+
+            self.logger.debug(f"Total P {total_setpoint} \nTotal Q {total_setpoint_q}")
             # Loads
-            load_ids = resource.get_load_ids()
+            load_ids = resource.get_Load_ids()
             for loadID in load_ids:
-                load_samples = case.read_horizon_samples(
-                    "load", loadID, fcast_type="PL", scenario_nr=no_scenario
+                self.logger.debug(f"Adding {loadID} to {resource.getID()}")
+                load_samples_p = case.read_horizon_samples(
+                    "load", loadID, fcast_type="PL", scenario_nr=no_scenario - 1
                 )
-                total_setpoint += load_samples
-            CR_data[resource.getID()] = {"p_set": total_setpoint}
+                load_samples_q = case.read_horizon_samples(
+                    "load", loadID, fcast_type="QL", scenario_nr=no_scenario - 1
+                )
+                self.logger.debug(f"P {load_samples_p} \nQ {load_samples_q}")
+                total_setpoint = [
+                    input_setpoint + sum(load_value)
+                    for input_setpoint, load_value in zip(
+                        total_setpoint, load_samples_p
+                    )
+                ]
+                total_setpoint_q = [
+                    input_setpoint + sum(load_value)
+                    for input_setpoint, load_value in zip(
+                        total_setpoint_q, load_samples_q
+                    )
+                ]
+            self.logger.debug(f"Total P {total_setpoint} \nTotal Q {total_setpoint_q}")
+
+            CR_data[resource.getID()] = {
+                "p_set": total_setpoint,
+                "q_set": total_setpoint_q,
+            }
 
         # Publish results
         case_settings = case.get_case_settings()

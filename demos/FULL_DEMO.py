@@ -347,8 +347,8 @@ def UPLOAD_Forecasts(automator, config_path, paths):
     #  GridAPPS Connection
     try:
         # Connect to GridAPPS-D Platform
-        gapps = GridAPPSD()
-        if not gapps.connected:
+        _gapps = GridAPPSD()
+        if not _gapps.connected:
             raise Exception("GridAPPSD not connected")
 
         myIOs = IObackup(
@@ -564,8 +564,8 @@ def RUN_DayAhead(automator, config_path, paths):
     #  GridAPPS Connection
     try:
         # Connect to GridAPPS-D Platform
-        gapps = GridAPPSD()
-        if not gapps.connected:
+        _gapps = GridAPPSD()
+        if not _gapps.connected:
             raise Exception("GridAPPSD not connected")
 
         myIOs = IObackup(
@@ -1035,8 +1035,8 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
     # ## Launch Simulation in GridApps
     try:
         # Connect to GridAPPS-D Platform
-        gapps = GridAPPSD()
-        if not gapps.connected:
+        _gapps = GridAPPSD()
+        if not _gapps.connected:
             raise Exception("GridAPPSD not connected")
 
         if config.use_ochre:
@@ -1096,7 +1096,7 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
         )
 
         # Create Simulation object
-        simulation_obj = Simulation(gapps, run_config)
+        simulation_obj = Simulation(_gapps, run_config)
         # Start Simulation
         simulation_obj.start_simulation(timeout=60)
         # Obtain Simulation ID
@@ -1163,6 +1163,11 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
     app_config["path_to_repo"] = str(path_to_repo)
     app_config["path_to_export"] = str(path_to_logs)
     app_config["path_to_archive"] = str(path_to_archive)
+    try:
+        app_config["adms_topic"] = config.mrid_adms_publisher
+    except:
+        # In case the ADMS topic doesn't exist we pass
+        pass
 
     try:
         _ = automator.add_process(
@@ -1191,19 +1196,22 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
 
     ##########################################################################################
     # ## Startup the other Apps
-    app_config = {}
-    app_config["tz"] = config.tz
-    app_config["Sbase"] = config.Sbase
-    app_config["tmstp_start"] = int(config.rt_dt0)
-    app_config["sim_time"] = sim_time
-    app_config["path_to_repo"] = str(path_to_repo)
-    app_config["path_to_export"] = str(path_to_logs)
-    app_config["path_to_archive"] = str(path_to_archive)
-    app_config["file_all_data"] = config.file_all_data
-    app_config["automation_topic"] = automation_topic
+    shared_app_config = {}
+    shared_app_config["tz"] = config.tz
+    shared_app_config["Sbase"] = config.Sbase
+    shared_app_config["tmstp_start"] = int(config.rt_dt0)
+    shared_app_config["sim_time"] = sim_time
+    shared_app_config["path_to_repo"] = str(path_to_repo)
+    shared_app_config["path_to_export"] = str(path_to_logs)
+    shared_app_config["path_to_archive"] = str(path_to_archive)
+    shared_app_config["file_all_data"] = config.file_all_data
+    shared_app_config["automation_topic"] = automation_topic
+    shared_app_config["FRS_topic"] = config.mrid_orchestrator
 
+    # ## ISO
     try:
         automator.start_task("ISO Startup")
+        app_config = shared_app_config.copy()
         app_config["mrid"] = config.mrid_iso
         app_config["log_level"] = config.log_iso
         app_config["message_period"] = config.dispatch_period_iso
@@ -1217,11 +1225,13 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
         logger.error(repr(e))
         raise e
 
+    # ## RT Controller
     try:
         automator.start_task("RT Controller Startup")
         if not config.use_rt_controller:
             raise (SkippingApp("RT Controller"))
 
+        app_config = shared_app_config.copy()
         app_config["mrid"] = config.mrid_rt_controller
         app_config["log_level"] = config.log_rt_controller
         app_config["message_period"] = config.period_rt_controller
@@ -1251,15 +1261,20 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
         logger.error("Something went wrong launching RT Controller")
         logger.error(repr(e))
 
+    # ## Dispatcher
     try:
         automator.start_task("Dispatcher Startup")
         if not config.use_dispatcher:
             raise (SkippingApp("Dispatcher"))
 
+        app_config = shared_app_config.copy()
         app_config["mrid"] = config.mrid_dispatcher
         app_config["log_level"] = config.log_dispatcher
+        app_config["FRS_topic"] = (
+            f"{config.mrid_orchestrator}_{config.mrid_rt_controller}"
+        )
         app_config["PV_list"] = config.PV_list_dispatcher
-
+        app_config["BATT_list"] = config.BATT_list_dispatcher
         automator.add_process(
             config.path_to_dispatcher, simulation_id, request, app_config
         )
@@ -1272,13 +1287,18 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
         logger.error("Something went wrong launching Dispatcher")
         logger.error(repr(e))
 
+    # ## Battery Aggregator
     try:
         automator.start_task("Battery Aggregator Startup")
         if not config.use_batt_aggregator:
             raise (SkippingApp("Battery Aggregator"))
 
+        app_config = shared_app_config.copy()
         app_config["mrid"] = config.mrid_batt_aggregator
         app_config["log_level"] = config.log_batt_aggregator
+        app_config["FRS_topic"] = (
+            f"{config.mrid_orchestrator}_{config.mrid_rt_controller}"
+        )
         app_config["aggregate_models"] = config.aggregate_models_batt_aggregator
         app_config["utility_models"] = config.utility_models_batt_aggregator
         app_config["meas_IDs"] = config.meas_ids_batt_aggregator
@@ -1295,19 +1315,82 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
         logger.error("Something went wrong launching Battery Aggregator")
         logger.error(repr(e))
 
+    # ## MPC Dispatch Controller
+    try:
+        automator.start_task("MPC Dispatch Controller Startup")
+        if not config.use_mpc_dispatch_controller:
+            raise (SkippingApp("MPC Dispatch Controller"))
+
+        app_config = shared_app_config.copy()
+        app_config["mrid"] = config.mrid_mpc_dispatch_controller
+        app_config["log_level"] = config.log_mpc_dispatch_controller
+        app_config["message_period"] = config.period_mpc_dispatch_controller
+        app_config["iteration_offset"] = config.iteration_offset_mpc_dispatch_controller
+        app_config["DERs"] = config.DER_ids_mpc_dispatch_controller
+        app_config["advanced"] = config.advanced_mpc_dispatch_controller
+
+        automator.add_process(
+            config.path_to_mpc_dispatch_controller, simulation_id, request, app_config
+        )
+        # Wait till the MPC Dispatch Controller flags the end of its initialization
+        automator.wait_for_task()
+    except SkippingApp as e:
+        automator.stop_task(e, bypass_stats=True)
+    except Exception as e:
+        automator.stop_task()
+        logger.error("Something went wrong launching MPC Dispatch Controller")
+        logger.error(repr(e))
+
+    # ## Microgrid Interface
+    try:
+        automator.start_task("Microgrid Interface Startup")
+        # In this Open Source Release, Microgrid Interface is not included
+        raise (SkippingApp("Microgrid Interface"))
+
+        # Regular code for when the Microgrid Interface is included
+        if not config.use_microgrid_interface:
+            raise (SkippingApp("Microgrid Interface"))
+
+        app_config = shared_app_config.copy()
+        app_config["mrid"] = config.mrid_microgrid_interface
+        app_config["log_level"] = config.log_microgrid_interface
+        app_config["message_period"] = config.period_microgrid_interface
+        app_config["iteration_offset"] = config.iteration_offset_microgrid_interface
+        app_config["FRS_topic"] = (
+            f"{config.mrid_orchestrator}_{config.mrid_mpc_dispatch_controller}"
+        )
+        app_config["microgrid_folder"] = config.microgrid_folder_microgrid_interface
+        app_config["MicroGrid_ids"] = config.MicroGrid_ids_microgrid_interface
+
+        automator.add_process(
+            config.path_to_microgrid_interface, simulation_id, request, app_config
+        )
+        # Wait till the Microgrid Interface flags the end of its initialization
+        automator.wait_for_task()
+    except SkippingApp as e:
+        automator.stop_task(e, bypass_stats=True)
+    except Exception as e:
+        automator.stop_task()
+        logger.error("Something went wrong launching Microgrid Interface")
+        logger.error(repr(e))
+
+    # ## ADMS Publisher
     try:
         automator.start_task("ADMS Publisher Startup")
         if not config.use_adms_publisher:
             raise (SkippingApp("ADMS Publisher"))
         app_config["mrid"] = config.mrid_adms_publisher
         app_config["log_level"] = config.log_adms_publisher
+        app_config["message_period"] = config.period_adms_publisher
+        app_config["iteration_offset"] = config.iteration_offset_adms_publisher
+        app_config["search_folder"] = config.search_folder_adms_publisher
         adms_event_list = [(config.adms_constraint_time, config.adms_constraint_file)]
         app_config["event_list"] = adms_event_list
 
         automator.add_process(
             config.path_to_adms_publisher, simulation_id, request, app_config
         )
-        # Wait till the Batt Aggregator flags the end of its initialization
+        # Wait till the ADMS Publisher flags the end of its initialization
         automator.wait_for_task()
     except SkippingApp as e:
         automator.stop_task(e, bypass_stats=True)
@@ -1316,6 +1399,7 @@ def RUN_RT(automator, config_path, paths, cancelled_DERs=[], ignored_DERs=[]):
         logger.error("Something went wrong launching ADMS Publisher")
         logger.error(repr(e))
 
+    # ## TMM
     try:
         automator.start_task("TMM Startup")
         # In this Open Source Release, TMM is not included
