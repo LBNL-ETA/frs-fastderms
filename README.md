@@ -1,11 +1,10 @@
-[![Documentation Status](https://readthedocs.org/projects/fast-derms-frs/badge/?version=latest)](https://fast-derms-frs.readthedocs.io/en/latest/?badge=latest)
-
 # Flexible Resource Scheduler for FAST-DERMS (FRS-FASTDERMS)
+
+The documentation for Flexible Resource Scheduler for FAST-DERMS is published on [Read the Docs](https://fast-derms-frs.readthedocs.io/en/latest/?badge=latest). [![Documentation Status](https://readthedocs.org/projects/fast-derms-frs/badge/?version=latest)](https://fast-derms-frs.readthedocs.io/en/latest/?badge=latest)
 
 ## License
 
-The FRS is distributed under a modified BSD license. 
-
+The FRS is distributed under a modified BSD license.
 The full license can be found in the [license.txt](license.txt) file.
 
 ## Copyright
