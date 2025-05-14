@@ -178,9 +178,33 @@ class Orchestrator(fastderms_app):
         self._MPC_ON = False
         self._MPC_run_count = 0
         self.MPC_options = {}
+        self._error_code = False
 
         self.logger.warning("Orchestrator Initialized")
         self.IOs.send_gapps_message(self._automation_topic, {"command": "stop_task"})
+
+    def running(self):
+        """
+        Check if the orchestrator is running without errors.
+
+        Returns:
+            bool: True if the orchestrator is running without errors, False otherwise. The status is determined by checking if there's no error code set.
+        """
+        # Check if any error code
+        running = not bool(self._error_code)
+        return running
+
+    def error(self):
+        """
+        Get the current error code of the orchestrator.
+
+        Returns:
+            int or bool: The error code value. Possible values:
+                - 0 or False: No error
+                - 1 or True: General error
+                - 2: Controlled termination
+        """
+        return self._error_code
 
     def on_message(self, headers, message):
         """
